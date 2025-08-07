@@ -1,6 +1,8 @@
 from ultralytics import YOLO
 from clearml import Task
 from clearml import Dataset
+import os
+import shutil
 
 task = Task.init(
     project_name="YOLO11n",
@@ -11,9 +13,15 @@ task = Task.init(
 
 
 dataset = Dataset.get(
-    dataset_project="YOLO", dataset_name="yolo-set", dataset_version="1.0.2"
+    dataset_project="YOLO11", dataset_name="sample", dataset_version="1.0.0"
 )
-local_path = dataset.get_local_copy()
+
+local_path = dataset.get_mutable_local_copy("./data", overwrite=True)
+
+print(f"Dataset downloaded to {local_path}")
+
+# move the dataset to the data directory
+
 model = "yolo11n"
 task.set_parameter("model", model)
 
@@ -24,7 +32,6 @@ args = dict(
     data="./yolo.yaml",
     epochs=1,
     imgsz=416,
-    device="mps",
 )
 # Train the model on COCO8
 task.connect(args)
