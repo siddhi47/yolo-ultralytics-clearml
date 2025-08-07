@@ -7,7 +7,9 @@ authors = [
     { name = "siddhi47", email = "siddhi.47.skb@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "ultralytics>=8.3.175",
+]
 
 [project.scripts]
 yolo-training = "yolo_training:main"
