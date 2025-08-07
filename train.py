@@ -2,6 +2,7 @@ from ultralytics import YOLO
 from clearml import Task, Dataset
 from hydra import main
 from omegaconf import DictConfig, OmegaConf
+from hydra.utils import get_original_cwd
 import os
 
 
@@ -20,9 +21,7 @@ def train(cfg: DictConfig):
         dataset_name=cfg.dataset.name,
         dataset_version=cfg.dataset.version,
     )
-    print(f"Loading data to {cfg.dataset.output_dir}")
     local_path = dataset.get_mutable_local_copy(cfg.dataset.output_dir, overwrite=True)
-    print(f"Dataset downloaded to {local_path}")
 
     # Log model name as parameter
     task.set_parameter("model", cfg.training.model_name)
@@ -30,6 +29,7 @@ def train(cfg: DictConfig):
     # Load YOLO model
     model = YOLO(cfg.training.model_weights)
     training_args = OmegaConf.to_container(cfg.yolo_args, resolve=True)
+    training_args["data"] = os.path.join(get_original_cwd(), training_args["data"])
 
     # Log args to ClearML
     task.connect(training_args)
