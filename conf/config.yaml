@@ -17,7 +17,9 @@ dataset:
 training:
   model_name: yolo11n
   model_weights: yolo11n.pt
-  data_yaml: ./yolo.yaml
+
+yolo_args:
+  data: ./yolo.yaml
   epochs: 1
   imgsz: 416
   device: gpu

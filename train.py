@@ -1,7 +1,7 @@
 from ultralytics import YOLO
 from clearml import Task, Dataset
 from hydra import main
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 import os
 
 
@@ -28,20 +28,13 @@ def train(cfg: DictConfig):
 
     # Load YOLO model
     model = YOLO(cfg.training.model_weights)
-
-    # Training args
-    args = dict(
-        data=cfg.training.data_yaml,
-        epochs=cfg.training.epochs,
-        imgsz=cfg.training.imgsz,
-        device=cfg.training.device,
-    )
+    training_args = OmegaConf.to_container(cfg.yolo_args, resolve=True)
 
     # Log args to ClearML
-    task.connect(args)
+    task.connect(training_args)
 
     # Train
-    results = model.train(**args)
+    _ = model.train(**training_args)
 
 
 if __name__ == "__main__":
