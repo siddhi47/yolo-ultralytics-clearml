@@ -19,8 +19,12 @@ training:
   model_weights: yolo11n.pt
 
 yolo_args:
-  data: ./yolo.yaml
-  epochs: 1
+  data:  yolo.yaml
+  epochs: 10
   imgsz: 416
+  batch: 2
   device: 0
-
+  workers: 2
+hydra:
+  run:
+    dir: .
