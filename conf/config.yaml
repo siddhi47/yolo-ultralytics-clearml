@@ -1,0 +1,24 @@
+defaults:
+  - override hydra/job_logging: disabled
+  - override hydra/hydra_logging: disabled
+
+task:
+  project_name: YOLO11n
+  task_name: Train on COCO8
+  task_type: optimizer
+  reuse_last_task_id: False
+
+dataset:
+  project: YOLO11
+  name: sample
+  version: 1.0.0
+  output_dir: ./data
+
+training:
+  model_name: yolo11n
+  model_weights: yolo11n.pt
+  data_yaml: ./yolo.yaml
+  epochs: 1
+  imgsz: 416
+  device: gpu
+
