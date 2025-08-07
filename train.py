@@ -20,6 +20,7 @@ def train(cfg: DictConfig):
         dataset_name=cfg.dataset.name,
         dataset_version=cfg.dataset.version,
     )
+    print(f"Loading data to {cfg.dataset.output_dir}")
     local_path = dataset.get_mutable_local_copy(cfg.dataset.output_dir, overwrite=True)
     print(f"Dataset downloaded to {local_path}")
 
