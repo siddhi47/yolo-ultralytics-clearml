@@ -1,39 +1,48 @@
 from ultralytics import YOLO
-from clearml import Task
-from clearml import Dataset
+from clearml import Task, Dataset
+from hydra import main
+from omegaconf import DictConfig
 import os
-import shutil
-
-task = Task.init(
-    project_name="YOLO11n",
-    task_name="Train on COCO8",
-    task_type=Task.TaskTypes.optimizer,
-    reuse_last_task_id=False,
-)
 
 
-dataset = Dataset.get(
-    dataset_project="YOLO11", dataset_name="sample", dataset_version="1.0.0"
-)
+@main(config_path="./conf", config_name="config.yaml")
+def train(cfg: DictConfig):
+    # Initialize ClearML Task
+    task = Task.init(
+        project_name=cfg.task.project_name,
+        task_name=cfg.task.task_name,
+        reuse_last_task_id=cfg.task.reuse_last_task_id,
+    )
 
-local_path = dataset.get_mutable_local_copy("./data", overwrite=True)
+    # Download dataset
+    dataset = Dataset.get(
+        dataset_project=cfg.dataset.project,
+        dataset_name=cfg.dataset.name,
+        dataset_version=cfg.dataset.version,
+    )
+    local_path = dataset.get_mutable_local_copy(cfg.dataset.output_dir, overwrite=True)
+    print(f"Dataset downloaded to {local_path}")
 
-print(f"Dataset downloaded to {local_path}")
+    # Log model name as parameter
+    task.set_parameter("model", cfg.training.model_name)
 
-# move the dataset to the data directory
+    # Load YOLO model
+    model = YOLO(cfg.training.model_weights)
 
-model = "yolo11n"
-task.set_parameter("model", model)
+    # Training args
+    args = dict(
+        data=cfg.training.data_yaml,
+        epochs=cfg.training.epochs,
+        imgsz=cfg.training.imgsz,
+        device=cfg.training.device,
+    )
 
-# Load a pretrained YOLO11n model
-model = YOLO(f"{model}.pt")
+    # Log args to ClearML
+    task.connect(args)
 
-args = dict(
-    data="./yolo.yaml",
-    epochs=1,
-    imgsz=416,
-)
-# Train the model on COCO8
-task.connect(args)
+    # Train
+    results = model.train(**args)
 
-results = model.train(**args)
+
+if __name__ == "__main__":
+    train()
