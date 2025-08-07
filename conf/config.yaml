@@ -22,5 +22,5 @@ yolo_args:
   data: ./yolo.yaml
   epochs: 1
   imgsz: 416
-  device: gpu
+  device: 0
 
