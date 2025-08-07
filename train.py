@@ -6,7 +6,7 @@ from hydra.utils import get_original_cwd
 import os
 
 
-@main(config_path="./conf", config_name="config.yaml")
+@main(config_path="./conf", config_name="config.yaml", version_base=None)
 def train(cfg: DictConfig):
     # Initialize ClearML Task
     task = Task.init(
