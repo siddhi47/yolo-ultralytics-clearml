@@ -11,7 +11,7 @@ task = Task.init(
 
 
 dataset = Dataset.get(
-    dataset_project="YOLO", dataset_name="yolo-set", dataset_version="1.0.2"
+    dataset_project="YOLO11", dataset_name="sample", dataset_version="1.0.0"
 )
 local_path = dataset.get_local_copy()
 model = "yolo11n"
