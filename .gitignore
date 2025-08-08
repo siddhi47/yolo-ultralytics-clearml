@@ -14,3 +14,4 @@ data/
 dataset/
 *.pt
 runs
+outputs/
