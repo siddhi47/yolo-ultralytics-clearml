@@ -3,28 +3,50 @@ defaults:
   - override hydra/hydra_logging: disabled
 
 task:
-  project_name: YOLO11n
-  task_name: Train on COCO8
-  task_type: optimizer
+  project_name: YOLO-CVAT
+  task_name: Train YOLO
   reuse_last_task_id: False
 
+# ── Job 1: ingest ────────────────────────────────────────────────────────────
+ingest:
+  bucket: gt-cvat-annotations
+  zip_prefix: ""          # prefix inside bucket where ZIPs live (empty = bucket root)
+  raw_prefix: raw         # destination prefix for organised structure
+
+# ── Job 2: sample ────────────────────────────────────────────────────────────
+sample:
+  bucket: gt-cvat-annotations
+  raw_prefix: raw
+  datasets_prefix: datasets
+  dataset_name: yolo-cvat
+  dataset_version: "1.0.0"
+  sample_every_n: 10      # extract every Nth frame (includes background frames)
+  val_ratio: 0.2          # fraction of tasks held out for validation
+  output_uri: s3://gt-cvat-annotations/clearml   # ClearML metadata stored here
+  allowed_classes:
+    - person
+    - bicycle
+    - car
+
+# ── Job 3: train ─────────────────────────────────────────────────────────────
 dataset:
-  project: YOLO11
-  name: sample
-  version: 1.0.0
+  project: YOLO-CVAT
+  name: yolo-cvat
+  version: "1.0.0"
   output_dir: ./data
 
 training:
   model_name: yolo11n
   model_weights: yolo11n.pt
+  output_uri: s3://gt-cvat-annotations/clearml   # model artifacts stored here
 
 yolo_args:
-  data:  yolo.yaml
-  epochs: 10
-  imgsz: 416
-  batch: 2
+  epochs: 50
+  imgsz: 640
+  batch: 16
   device: 0
-  workers: 2
+  workers: 4
+
 hydra:
   run:
     dir: .
