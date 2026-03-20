@@ -40,7 +40,10 @@ from hydra import main as hydra_main
 from omegaconf import DictConfig
 from tqdm import tqdm
 
+from yolo_training.log import get_logger
 from yolo_training.s3_ops import download_file, list_zip_keys, upload_file, upload_fileobj
+
+log = get_logger("ingest")
 
 
 def _safe_project_name(name: str) -> str:
@@ -78,7 +81,7 @@ def _ingest_zip(s3, bucket: str, zip_key: str, raw_prefix: str, tmp_dir: str | N
     """Download one ZIP, extract it, upload the organised structure to S3."""
     with tempfile.TemporaryDirectory(dir=tmp_dir) as tmpdir:
         zip_path = os.path.join(tmpdir, "export.zip")
-        print(f"  Downloading s3://{bucket}/{zip_key}")
+        log.info("Downloading s3://%s/%s", bucket, zip_key)
         download_file(s3, bucket, zip_key, zip_path)
 
         extract_dir = os.path.join(tmpdir, "extracted")
@@ -92,7 +95,7 @@ def _ingest_zip(s3, bucket: str, zip_key: str, raw_prefix: str, tmp_dir: str | N
 
         project_json_path = os.path.join(extract_dir, "project.json")
         if not os.path.exists(project_json_path):
-            print(f"  Skipping (not a CVAT project export — no project.json): {zip_key}")
+            log.warning("Skipping %s — not a CVAT project export (no project.json)", zip_key)
             return None, 0
         with open(project_json_path) as f:
             project_meta = json.load(f)
@@ -125,7 +128,7 @@ def _ingest_zip(s3, bucket: str, zip_key: str, raw_prefix: str, tmp_dir: str | N
                         )
                         break
 
-        print(f"  Uploaded project '{project_name}' ({len(task_dirs)} tasks)")
+        log.info("Uploaded project '%s' (%d tasks)", project_name, len(task_dirs))
         return project_name, len(task_dirs)
 
 
@@ -145,17 +148,17 @@ def ingest(cfg: DictConfig):
 
     zip_keys = list_zip_keys(s3, bucket, cfg.ingest.zip_prefix)
     if not zip_keys:
-        print(f"No ZIP files found in s3://{bucket}/{cfg.ingest.zip_prefix}")
+        log.warning("No ZIP files found in s3://%s/%s", bucket, cfg.ingest.zip_prefix)
         clearml_task.close()
         return
 
-    print(f"Found {len(zip_keys)} ZIP file(s)")
+    log.info("Found %d ZIP file(s) in s3://%s/%s", len(zip_keys), bucket, cfg.ingest.zip_prefix)
 
     ingested, skipped = [], []
     for zip_key in tqdm(zip_keys, desc="Ingesting ZIPs"):
         etag = _get_zip_etag(s3, bucket, zip_key)
         if _is_already_ingested(s3, bucket, markers_prefix, zip_key, etag):
-            print(f"  Skipping (already ingested): {zip_key}")
+            log.debug("Skipping (already ingested): %s", zip_key)
             skipped.append(zip_key)
             continue
 
@@ -170,7 +173,7 @@ def ingest(cfg: DictConfig):
         f"Ingested: {len(ingested)} | Skipped (already done): {len(skipped)}\n" +
         "\n".join(f"  {r['project']}: {r['tasks']} tasks" for r in ingested)
     )
-    print(summary)
+    log.info(summary)
     clearml_task.logger.report_text(summary)
     clearml_task.close()
 

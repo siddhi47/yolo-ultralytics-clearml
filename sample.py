@@ -44,11 +44,14 @@ from omegaconf import DictConfig
 from tqdm import tqdm
 
 from yolo_training.cvat_parser import parse_annotations, to_yolo_line
+from yolo_training.log import get_logger
 from yolo_training.s3_ops import (
     download_file,
     list_immediate_prefixes,
     upload_fileobj,
 )
+
+log = get_logger("sample")
 
 
 def _build_class_map(allowed_classes: list[str]) -> dict[str, int]:
@@ -90,6 +93,7 @@ def _process_task(
         task_json_path = os.path.join(tmpdir, "task.json")
         video_path = os.path.join(tmpdir, "video.mp4")
 
+        log.debug("Downloading metadata for %s/%s", task_s3_prefix, task_id)
         download_file(s3, bucket, f"{task_s3_prefix}annotations.json", ann_path)
         download_file(s3, bucket, f"{task_s3_prefix}task.json", task_json_path)
 
@@ -99,12 +103,19 @@ def _process_task(
 
         frame_annotations = parse_annotations(ann_path)
         sampled_frames = set(range(0, stop_frame + 1, sample_every_n))
+        log.debug(
+            "%s/%s: stop_frame=%d, annotated=%d, sampling every %d → %d frames",
+            project_name, task_id, stop_frame, len(frame_annotations),
+            sample_every_n, len(sampled_frames),
+        )
 
+        log.info("Downloading video for %s/%s", project_name, task_id)
         download_file(s3, bucket, f"{task_s3_prefix}video.mp4", video_path)
 
         cap = cv2.VideoCapture(video_path)
         img_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         img_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        log.debug("Video dimensions: %dx%d", img_w, img_h)
 
         s3_img_prefix = f"{dataset_s3_prefix}/{split}/images"
         s3_lbl_prefix = f"{dataset_s3_prefix}/{split}/labels"
@@ -139,11 +150,14 @@ def _process_task(
                         to_yolo_line(class_map[label], x1, y1, x2, y2, img_w, img_h)
                     )
 
-                upload_fileobj(
-                    s3, bucket,
-                    f"{s3_lbl_prefix}/{frame_name}.txt",
-                    io.BytesIO("\n".join(label_lines).encode()),
-                )
+                # Only upload label file if there are annotations — YOLO treats
+                # a missing label file as a background image, and ClearML rejects 0-byte files.
+                if label_lines:
+                    upload_fileobj(
+                        s3, bucket,
+                        f"{s3_lbl_prefix}/{frame_name}.txt",
+                        io.BytesIO("\n".join(label_lines).encode()),
+                    )
                 uploaded += 1
 
             frame_idx += 1
@@ -168,14 +182,14 @@ def sample(cfg: DictConfig):
 
     all_tasks = _collect_tasks(s3, bucket, cfg.sample.raw_prefix)
     if not all_tasks:
-        print(f"No tasks found under s3://{bucket}/{cfg.sample.raw_prefix}")
+        log.warning("No tasks found under s3://%s/%s", bucket, cfg.sample.raw_prefix)
         clearml_task.close()
         return
 
     # Split by task: last val_ratio fraction → val
     n_val = max(1, math.ceil(len(all_tasks) * cfg.sample.val_ratio))
     val_set = {t[2] for t in all_tasks[-n_val:]}  # set of task_s3_prefix strings
-    print(f"Tasks: {len(all_tasks)} total — {len(all_tasks) - n_val} train / {n_val} val")
+    log.info("Tasks: %d total — %d train / %d val", len(all_tasks), len(all_tasks) - n_val, n_val)
 
     allowed_classes: list[str] = list(cfg.sample.allowed_classes)
     class_map = _build_class_map(allowed_classes)
@@ -200,9 +214,9 @@ def sample(cfg: DictConfig):
             sample_every_n=cfg.sample.sample_every_n,
         )
         stats[split] += n_frames
-        print(f"  [{split}] {project_name}/{task_id}: {n_frames} frames")
+        log.info("[%s] %s/%s: %d frames uploaded", split, project_name, task_id, n_frames)
 
-    print(f"\nTotal — train: {stats['train']} frames | val: {stats['val']} frames")
+    log.info("Total — train: %d frames | val: %d frames", stats["train"], stats["val"])
 
     # Create versioned ClearML Dataset referencing S3 files (no upload to ClearML)
     dataset = Dataset.create(
