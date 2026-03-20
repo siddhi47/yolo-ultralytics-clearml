@@ -4,6 +4,13 @@ Job 1 — Ingest CVAT project export ZIPs from S3.
 Downloads each ZIP from s3://<bucket>/<zip_prefix>, extracts it, and re-uploads
 the organised structure to s3://<bucket>/raw/<project_name>/task_N/.
 
+Processed ZIPs are tracked via marker files at:
+  <markers_prefix>/<zip_key>.done   (content = S3 ETag of the ZIP)
+
+On re-run, a ZIP is skipped if its marker exists AND the ETag matches.
+If the same ZIP filename is re-uploaded with new content, the ETag changes
+and the ZIP is re-ingested automatically.
+
 S3 output layout:
   raw/
     <project-name>/
@@ -17,9 +24,11 @@ S3 output layout:
 
 Run:
     python ingest.py
-    python ingest.py ingest.zip_prefix=exports/  # override any hydra key
+    python ingest.py ingest.zip_prefix=exports/
+    python ingest.py ingest.tmp_dir=/dev/shm
 """
 
+import io
 import json
 import os
 import tempfile
@@ -31,16 +40,43 @@ from hydra import main as hydra_main
 from omegaconf import DictConfig
 from tqdm import tqdm
 
-from yolo_training.s3_ops import download_file, list_zip_keys, upload_file
+from yolo_training.s3_ops import download_file, list_zip_keys, upload_file, upload_fileobj
 
 
 def _safe_project_name(name: str) -> str:
     return name.replace(" ", "-").replace("/", "_").replace("\\", "_")
 
 
-def _ingest_zip(s3, bucket: str, zip_key: str, raw_prefix: str):
+def _marker_key(markers_prefix: str, zip_key: str) -> str:
+    safe = zip_key.replace("/", "__")
+    return f"{markers_prefix}/{safe}.done"
+
+
+def _get_zip_etag(s3, bucket: str, zip_key: str) -> str:
+    resp = s3.head_object(Bucket=bucket, Key=zip_key)
+    return resp["ETag"].strip('"')
+
+
+def _is_already_ingested(s3, bucket: str, markers_prefix: str, zip_key: str, etag: str) -> bool:
+    marker = _marker_key(markers_prefix, zip_key)
+    try:
+        resp = s3.get_object(Bucket=bucket, Key=marker)
+        stored_etag = resp["Body"].read().decode().strip()
+        return stored_etag == etag
+    except s3.exceptions.NoSuchKey:
+        return False
+    except Exception:
+        return False
+
+
+def _write_marker(s3, bucket: str, markers_prefix: str, zip_key: str, etag: str):
+    marker = _marker_key(markers_prefix, zip_key)
+    upload_fileobj(s3, bucket, marker, io.BytesIO(etag.encode()))
+
+
+def _ingest_zip(s3, bucket: str, zip_key: str, raw_prefix: str, tmp_dir: str | None):
     """Download one ZIP, extract it, upload the organised structure to S3."""
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(dir=tmp_dir) as tmpdir:
         zip_path = os.path.join(tmpdir, "export.zip")
         print(f"  Downloading s3://{bucket}/{zip_key}")
         download_file(s3, bucket, zip_key, zip_path)
@@ -54,8 +90,10 @@ def _ingest_zip(s3, bucket: str, zip_key: str, raw_prefix: str):
         if len(entries) == 1 and os.path.isdir(os.path.join(extract_dir, entries[0])):
             extract_dir = os.path.join(extract_dir, entries[0])
 
-        # Read project name
         project_json_path = os.path.join(extract_dir, "project.json")
+        if not os.path.exists(project_json_path):
+            print(f"  Skipping (not a CVAT project export — no project.json): {zip_key}")
+            return None, 0
         with open(project_json_path) as f:
             project_meta = json.load(f)
         project_name = _safe_project_name(project_meta["name"])
@@ -85,7 +123,7 @@ def _ingest_zip(s3, bucket: str, zip_key: str, raw_prefix: str):
                             f"{task_s3_prefix}/video.mp4",
                             os.path.join(data_dir, fname),
                         )
-                        break  # one video per task
+                        break
 
         print(f"  Uploaded project '{project_name}' ({len(task_dirs)} tasks)")
         return project_name, len(task_dirs)
@@ -102,24 +140,38 @@ def ingest(cfg: DictConfig):
 
     s3 = boto3.client("s3")
     bucket = cfg.ingest.bucket
-    zip_keys = list_zip_keys(s3, bucket, cfg.ingest.zip_prefix)
+    markers_prefix = cfg.ingest.markers_prefix
+    tmp_dir = cfg.ingest.get("tmp_dir", None)
 
+    zip_keys = list_zip_keys(s3, bucket, cfg.ingest.zip_prefix)
     if not zip_keys:
         print(f"No ZIP files found in s3://{bucket}/{cfg.ingest.zip_prefix}")
         clearml_task.close()
         return
 
-    print(f"Found {len(zip_keys)} ZIP file(s) in s3://{bucket}/{cfg.ingest.zip_prefix}")
+    print(f"Found {len(zip_keys)} ZIP file(s)")
 
-    results = []
+    ingested, skipped = [], []
     for zip_key in tqdm(zip_keys, desc="Ingesting ZIPs"):
-        project_name, n_tasks = _ingest_zip(s3, bucket, zip_key, cfg.ingest.raw_prefix)
-        results.append({"zip": zip_key, "project": project_name, "tasks": n_tasks})
+        etag = _get_zip_etag(s3, bucket, zip_key)
+        if _is_already_ingested(s3, bucket, markers_prefix, zip_key, etag):
+            print(f"  Skipping (already ingested): {zip_key}")
+            skipped.append(zip_key)
+            continue
 
-    clearml_task.logger.report_text(
-        f"Ingested {len(results)} project(s):\n" +
-        "\n".join(f"  {r['project']}: {r['tasks']} tasks" for r in results)
+        project_name, n_tasks = _ingest_zip(s3, bucket, zip_key, cfg.ingest.raw_prefix, tmp_dir)
+        if project_name is None:
+            skipped.append(zip_key)
+            continue
+        _write_marker(s3, bucket, markers_prefix, zip_key, etag)
+        ingested.append({"zip": zip_key, "project": project_name, "tasks": n_tasks})
+
+    summary = (
+        f"Ingested: {len(ingested)} | Skipped (already done): {len(skipped)}\n" +
+        "\n".join(f"  {r['project']}: {r['tasks']} tasks" for r in ingested)
     )
+    print(summary)
+    clearml_task.logger.report_text(summary)
     clearml_task.close()
 
 

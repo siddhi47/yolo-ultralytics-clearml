@@ -12,6 +12,8 @@ ingest:
   bucket: gt-cvat-annotations
   zip_prefix: ""          # prefix inside bucket where ZIPs live (empty = bucket root)
   raw_prefix: raw         # destination prefix for organised structure
+  markers_prefix: raw/.markers  # processed ZIP markers stored here
+  tmp_dir: null           # override with /dev/shm if root partition is tight
 
 # ── Job 2: sample ────────────────────────────────────────────────────────────
 sample:
